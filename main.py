@@ -7,19 +7,20 @@ from sklearn.metrics import mean_squared_error, r2_score
 from web3 import Web3
 import requests
 
-# ML Model Code
+# Updated Data with Duration and Weather Impact
 data = {
     'weather_condition': [0, 1, 0, 1, 2, 0, 1, 2, 2, 0],
     'distance_km': [100, 200, 300, 400, 250, 120, 310, 450, 220, 150],
     'past_delays_hours': [1, 2, 0.5, 3, 2.5, 1, 0.5, 3.5, 2, 1.5],
     'route_blockages': [0, 1, 0, 1, 0, 0, 1, 1, 0, 0],
     'natural_calamities': [0, 0, 1, 1, 0, 0, 0, 1, 0, 0],
+    'duration_hours': [2, 4, 5, 7, 5, 3, 6, 8, 4, 3],
     'transport_cost': [5000, 10000, 15000, 20000, 12500, 6000, 15500, 22500, 11500, 7000],
     'optimal_transport_mode': [0, 1, 0, 1, 2, 0, 1, 2, 2, 0]
 }
 
 df = pd.DataFrame(data)
-X = df[['weather_condition', 'distance_km', 'past_delays_hours', 'route_blockages', 'natural_calamities']]
+X = df[['weather_condition', 'distance_km', 'past_delays_hours', 'route_blockages', 'natural_calamities', 'duration_hours']]
 y = df[['optimal_transport_mode', 'transport_cost']]
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -27,15 +28,22 @@ model = MultiOutputRegressor(LinearRegression())
 model.fit(X_train, y_train)
 
 # Example new data for prediction
-new_data = np.array([[0, 150, 1, 0, 0]])
+new_data = np.array([[0, 150, 1, 0, 0, 3]])  # Added Duration and Weather
 prediction = model.predict(new_data)
 
 optimal_mode = np.round(prediction[0][0])
 predicted_cost = prediction[0][1]
 
+# Considering weather impact
+weather_impact = {0: 0.9, 1: 1.0, 2: 1.2}  # Weather impact on cost and duration
+weather_condition = new_data[0][0]
+cost_with_weather = predicted_cost * weather_impact[weather_condition]
+duration_with_weather = new_data[0][5] * weather_impact[weather_condition]
+
 modes = {0: 'Truck', 1: 'Flight', 2: 'Train'}
 print(f"Optimal Transport Mode: {modes[optimal_mode]}")
-print(f"Predicted Transport Cost: ₹{predicted_cost:.2f}")
+print(f"Predicted Transport Cost (with Weather Impact): ₹{cost_with_weather:.2f}")
+print(f"Predicted Duration (with Weather Impact): {duration_with_weather:.2f} hours")
 
 # Blockchain Integration
 web3 = Web3(Web3.HTTPProvider('YOUR_INFURA_OR_ALCHEMY_URL'))
@@ -71,31 +79,32 @@ def process_payment(amount):
         print("Payment processing failed")
         return None
 
-def book_transport(optimal_mode, predicted_cost, payment_id):
+def book_transport(optimal_mode, cost_with_weather, payment_id):
     sender_address = '0xYourSenderAddress'
     receiver_address = '0xYourReceiverAddress'
     admin_address = '0xYourAdminAddress'
     agency_address = '0xTransportAgencyAddress'
 
-    if optimal_mode == 0:
-        # Book Truck
-        tx_hash = create_booking("Truck", predicted_cost, agency_address, admin_address)
-        print("Truck Booking Transaction Hash:", tx_hash)
-    elif optimal_mode == 1:
-        # Book Flight
-        tx_hash = create_booking("Flight", predicted_cost, agency_address, admin_address)
-        print("Flight Booking Transaction Hash:", tx_hash)
-    elif optimal_mode == 2:
-        # Book Train
-        tx_hash = create_booking("Train", predicted_cost, agency_address, admin_address)
-        print("Train Booking Transaction Hash:", tx_hash)
-    else:
-        print("Invalid transport mode")
-        return
+    # Priority based on predicted cost and duration with weather impact
+    transport_modes = {
+        0: "Truck",
+        1: "Flight",
+        2: "Train"
+    }
+    
+    sorted_modes = sorted(transport_modes.items(), key=lambda x: (cost_with_weather, duration_with_weather))  # Sort by cost and duration
+    chosen_mode = sorted_modes[0][0]
 
-    # Make Payment
-    payment_tx_hash = make_payment(booking_id, sender_address)
-    print("Payment Transaction Hash:", payment_tx_hash)
+    if optimal_mode == chosen_mode:
+        # Book Transport
+        tx_hash = create_booking(transport_modes[chosen_mode], cost_with_weather, agency_address, admin_address)
+        print(f"{transport_modes[chosen_mode]} Booking Transaction Hash:", tx_hash)
+        
+        # Make Payment
+        payment_tx_hash = make_payment(payment_id, sender_address)
+        print("Payment Transaction Hash:", payment_tx_hash)
+    else:
+        print("Optimal transport mode does not match with the chosen mode based on cost and duration")
 
 def create_booking(transport_mode, amount, transport_agency, admin):
     tx = booking_contract.functions.createBooking(transport_mode, amount, transport_agency).buildTransaction({
@@ -121,9 +130,9 @@ def make_payment(booking_id, payer):
     return web3.toHex(tx_hash)
 
 # Execute the process
-payment_id = process_payment(predicted_cost)
+payment_id = process_payment(cost_with_weather)
 
 if payment_id:
-    book_transport(optimal_mode, predicted_cost, payment_id)
+    book_transport(optimal_mode, cost_with_weather, payment_id)
 else:
     print("Payment failed, booking not completed")
