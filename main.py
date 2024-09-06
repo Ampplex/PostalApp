@@ -3,9 +3,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
-from web3 import Web3
 import requests
+from web3 import Web3
 
 # Updated Data with Duration and Weather Impact
 data = {
@@ -45,6 +44,11 @@ print(f"Optimal Transport Mode: {modes[optimal_mode]}")
 print(f"Predicted Transport Cost (with Weather Impact): ₹{cost_with_weather:.2f}")
 print(f"Predicted Duration (with Weather Impact): {duration_with_weather:.2f} hours")
 
+# API URLs for truck, flight, and train booking
+truck_api_url = "https://api.trukky.com/v1/book"
+flight_api_url = "https://partners.api.skyscanner.net/apiservices/pricing/v1.0"
+train_api_url = "https://api.irctc.co.in/book"
+
 # Blockchain Integration
 web3 = Web3(Web3.HTTPProvider('YOUR_INFURA_OR_ALCHEMY_URL'))
 
@@ -81,10 +85,8 @@ def process_payment(amount):
 
 def book_transport(optimal_mode, cost_with_weather, payment_id):
     sender_address = '0xYourSenderAddress'
-    receiver_address = '0xYourReceiverAddress'
     admin_address = '0xYourAdminAddress'
-    agency_address = '0xTransportAgencyAddress'
-
+    
     # Priority based on predicted cost and duration with weather impact
     transport_modes = {
         0: "Truck",
@@ -92,22 +94,37 @@ def book_transport(optimal_mode, cost_with_weather, payment_id):
         2: "Train"
     }
     
-    sorted_modes = sorted(transport_modes.items(), key=lambda x: (cost_with_weather, duration_with_weather))  # Sort by cost and duration
-    chosen_mode = sorted_modes[0][0]
-
-    if optimal_mode == chosen_mode:
-        # Book Transport
-        tx_hash = create_booking(transport_modes[chosen_mode], cost_with_weather, agency_address, admin_address)
-        print(f"{transport_modes[chosen_mode]} Booking Transaction Hash:", tx_hash)
+    if optimal_mode == 0:
+        api_url = truck_api_url
+    elif optimal_mode == 1:
+        api_url = flight_api_url
+    else:
+        api_url = train_api_url
+    
+    booking_data = {
+        'mode': transport_modes[optimal_mode],
+        'amount': cost_with_weather,
+        'admin': admin_address
+    }
+    
+    response = requests.post(api_url, json=booking_data)
+    
+    if response.status_code == 200:
+        tx_hash = response.json().get("transaction_hash")
+        print(f"{transport_modes[optimal_mode]} Booking Transaction Hash:", tx_hash)
+        
+        # Blockchain booking creation
+        tx = create_booking(transport_modes[optimal_mode], cost_with_weather, admin_address)
+        print(f"Blockchain Transaction Hash: {tx}")
         
         # Make Payment
         payment_tx_hash = make_payment(payment_id, sender_address)
         print("Payment Transaction Hash:", payment_tx_hash)
     else:
-        print("Optimal transport mode does not match with the chosen mode based on cost and duration")
+        print(f"{transport_modes[optimal_mode]} booking failed")
 
-def create_booking(transport_mode, amount, transport_agency, admin):
-    tx = booking_contract.functions.createBooking(transport_mode, amount, transport_agency).buildTransaction({
+def create_booking(transport_mode, amount, admin):
+    tx = booking_contract.functions.createBooking(transport_mode, amount, admin).buildTransaction({
         'from': admin,
         'gas': 2000000,
         'gasPrice': web3.toWei('20', 'gwei'),
